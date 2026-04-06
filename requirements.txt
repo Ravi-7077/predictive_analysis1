@@ -2,3 +2,7 @@ flask
 joblib
 xgboost
 numpy
+pandas
+plotly
+streamlit
+gunicorn

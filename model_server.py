@@ -9,6 +9,7 @@ import xgboost as xgb
 app = Flask(__name__)
 
 MODEL_PATH = Path('hybrid_model.pkl')
+XGBOOST_MODEL_PATH = Path('xgboost_power_model.json')
 
 # You should save your trained model from the notebook as hybrid_model.pkl
 # e.g.:
@@ -18,10 +19,26 @@ MODEL_PATH = Path('hybrid_model.pkl')
 model = None
 if MODEL_PATH.exists():
     import joblib
-    model = joblib.load(MODEL_PATH)
-    print(f'Loaded model from {MODEL_PATH}')
+    try:
+        loaded = joblib.load(MODEL_PATH)
+        # Check if it's a proper model with predict method
+        if hasattr(loaded, 'predict') and callable(getattr(loaded, 'predict')):
+            model = loaded
+            print(f'Loaded model from {MODEL_PATH}')
+        else:
+            print(f'Warning: hybrid_model.pkl exists but is not a valid model object.')
+    except Exception as e:
+        print(f'Warning: Could not load hybrid_model.pkl: {e}')
+elif XGBOOST_MODEL_PATH.exists():
+    try:
+        xgb_model = xgb.XGBRegressor()
+        xgb_model.load_model(XGBOOST_MODEL_PATH)
+        model = xgb_model
+        print(f'Loaded XGBoost model from {XGBOOST_MODEL_PATH}')
+    except Exception as e:
+        print(f'Warning: Could not load XGBoost model: {e}')
 else:
-    print('Warning: hybrid_model.pkl not found. API will use fallback formula.')
+    print('Warning: No model file found. API will use fallback formula.')
 
 @app.route('/')
 def index():
@@ -47,14 +64,20 @@ def predict():
         float(data['wind_direction_10m'])
     ]])
 
+    hybrid_pred = None
+    baseline_pred = float(0.52*data['power_lag_1'] + 0.27*data['power_lag_24'] + 1.8*data['hour'] + 4.5*data['dayofweek'] + 2.1*data['month'] + 0.13*data['temperature_2m'] + 0.09*data['relative_humidity_2m'])
+    
     if model is not None:
-        pred = model.predict(features)
-        hybrid_pred = float(pred[0])
-        baseline_pred = float(0.52*data['power_lag_1'] + 0.27*data['power_lag_24'] + 1.8*data['hour'] + 4.5*data['dayofweek'] + 2.1*data['month'] + 0.13*data['temperature_2m'] + 0.09*data['relative_humidity_2m'])
-    else:
+        try:
+            pred = model.predict(features)
+            hybrid_pred = float(pred[0])
+        except Exception as e:
+            print(f'Model prediction failed: {e}. Using fallback formula.')
+            hybrid_pred = None
+    
+    if hybrid_pred is None:
         # fallback formula from HTML twin simulation
         dayofweek = data['dayofweek']
-        baseline_pred = 0.52*data['power_lag_1'] + 0.27*data['power_lag_24'] + 1.8*data['hour'] + 4.5*dayofweek + 2.1*data['month'] + 0.13*data['temperature_2m'] + 0.09*data['relative_humidity_2m']
         weather_adjust = (
             (data['temperature_2m'] - 28) * 2.3 if data['temperature_2m'] > 28 else (20 - data['temperature_2m']) * 1.8 if data['temperature_2m'] < 20 else 0
         ) + max(0, (data['relative_humidity_2m'] - 55) * 1.4) + max(0, (data['wind_speed_10m'] - 10) * 0.4)
